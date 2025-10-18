@@ -1,0 +1,47 @@
+# Environment files
+.env
+.env.local
+
+# Node modules
+node_modules/
+package-lock.json
+yarn.lock
+
+# Hardhat
+cache/
+artifacts/
+typechain-types/
+
+# Anchor / Solana
+target/
+.anchor/
+test-ledger/
+
+# IDL files
+*.json
+
+# Deployment files
+deployments/
+
+# Keys (NEVER commit these!)
+*.key
+*.pem
+id.json
+keypair.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

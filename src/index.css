@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* GOATY Neon Theme - Dark Mode First */
+    --background: 0 0% 0%;
+    --foreground: 120 100% 50%;
+
+    --card: 0 0% 5%;
+    --card-foreground: 120 100% 95%;
+
+    --popover: 0 0% 8%;
+    --popover-foreground: 120 100% 95%;
+
+    --primary: 120 100% 50%; /* Neon Lime */
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 150 100% 40%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 15%;
+    --muted-foreground: 120 50% 60%;
+
+    --accent: 270 100% 60%; /* Purple accent */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 120 50% 20%;
+    --input: 0 0% 10%;
+    --ring: 120 100% 50%;
+
+    --radius: 0.75rem;
+
+    /* Neon effects */
+    --neon-glow: 0 0 20px hsl(120 100% 50% / 0.5);
+    --neon-glow-strong: 0 0 30px hsl(120 100% 50% / 0.8);
+    --gradient-primary: linear-gradient(135deg, hsl(120 100% 40%), hsl(150 100% 50%));
+    --gradient-dark: linear-gradient(180deg, hsl(0 0% 0%), hsl(0 0% 5%));
+    --gradient-card: linear-gradient(135deg, hsl(0 0% 5%), hsl(120 50% 8%));
+    
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .light {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 10%;
+    
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+    
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+    
+    --primary: 120 100% 35%; /* Darker green for light mode */
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 150 80% 35%;
+    --secondary-foreground: 0 0% 100%;
+    
+    --muted: 0 0% 92%;
+    --muted-foreground: 0 0% 40%;
+    
+    --accent: 270 90% 50%;
+    --accent-foreground: 0 0% 100%;
+    
+    --destructive: 0 80% 50%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 0 0% 88%;
+    --input: 0 0% 92%;
+    --ring: 120 100% 35%;
+    
+    --radius: 0.75rem;
+  }
+}
+
+@layer utilities {
+  .neon-text {
+    color: hsl(var(--primary));
+    text-shadow: 0 0 10px hsl(120 100% 50% / 0.5),
+                 0 0 20px hsl(120 100% 50% / 0.3);
+  }
+  
+  .neon-border {
+    border: 2px solid hsl(var(--primary));
+    box-shadow: 0 0 10px hsl(120 100% 50% / 0.3),
+                inset 0 0 10px hsl(120 100% 50% / 0.1);
+  }
+  
+  .neon-glow {
+    box-shadow: var(--neon-glow);
+  }
+  
+  .neon-glow-strong {
+    box-shadow: var(--neon-glow-strong);
+  }
+
+  .bg-gradient-primary {
+    background: var(--gradient-primary);
+  }
+  
+  .bg-gradient-dark {
+    background: var(--gradient-dark);
+  }
+
+  .bg-gradient-card {
+    background: var(--gradient-card);
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% {
+      box-shadow: 0 0 10px hsl(120 100% 50% / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px hsl(120 100% 50% / 0.6);
+    }
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

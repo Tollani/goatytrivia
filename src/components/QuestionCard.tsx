@@ -13,15 +13,15 @@ interface QuestionCardProps {
     correct_answer: string;
     category: string;
   };
-  onAnswer: (answer: string, isCorrect: boolean) => void;
+  onAnswer: (answer: string) => void;
   questionNumber: number;
+  totalQuestions: number;
 }
 
-export function QuestionCard({ question, onAnswer, questionNumber }: QuestionCardProps) {
+export function QuestionCard({ question, onAnswer, questionNumber, totalQuestions }: QuestionCardProps) {
   const [selectedAnswer, setSelectedAnswer] = useState<string>('');
   const [timeLeft, setTimeLeft] = useState(30);
   const [hasAnswered, setHasAnswered] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
 
   useEffect(() => {
     if (timeLeft === 0 && !hasAnswered) {
@@ -47,13 +47,11 @@ export function QuestionCard({ question, onAnswer, questionNumber }: QuestionCar
     if (hasAnswered) return;
     
     setHasAnswered(true);
-    setShowFeedback(true);
     
-    const isCorrect = answer === question.correct_answer;
-    
+    // Short delay for visual feedback, then advance
     setTimeout(() => {
-      onAnswer(answer, isCorrect);
-    }, 1500);
+      onAnswer(answer);
+    }, 500);
   };
 
   const handleSubmit = () => {
@@ -61,28 +59,38 @@ export function QuestionCard({ question, onAnswer, questionNumber }: QuestionCar
     submitAnswer(selectedAnswer);
   };
 
-  const getFeedbackClass = () => {
-    if (!showFeedback) return '';
-    return selectedAnswer === question.correct_answer 
-      ? 'border-green-500 bg-green-500/10' 
-      : 'border-destructive bg-destructive/10';
+  const getTimerColor = () => {
+    if (timeLeft <= 5) return 'bg-destructive';
+    if (timeLeft <= 15) return 'bg-yellow-500';
+    return 'bg-primary';
   };
 
   return (
-    <Card className={`p-4 md:p-8 bg-gradient-card border-2 transition-all ${getFeedbackClass()}`}>
+    <Card className="p-4 md:p-8 bg-gradient-card border-2 transition-all animate-fade-in">
       <div className="space-y-4 md:space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs md:text-sm font-medium text-muted-foreground">
-              Question {questionNumber}/3
-            </span>
-            <span className="px-2 py-1 text-xs bg-accent text-accent-foreground rounded">
-              {question.category}
-            </span>
+        {/* Progress and Timer Bar */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs md:text-sm font-medium text-muted-foreground">
+                Question {questionNumber}/{totalQuestions}
+              </span>
+              <span className="px-2 py-1 text-xs bg-accent text-accent-foreground rounded">
+                {question.category}
+              </span>
+            </div>
+            <div className={`flex items-center gap-2 ${timeLeft <= 5 ? 'text-destructive animate-pulse' : timeLeft <= 15 ? 'text-yellow-500' : 'text-primary'}`}>
+              <Clock className="h-4 w-4 md:h-5 md:w-5" />
+              <span className="text-xl md:text-2xl font-bold">{timeLeft}s</span>
+            </div>
           </div>
-          <div className={`flex items-center gap-2 ${timeLeft <= 1 ? 'text-destructive animate-pulse' : 'text-primary'}`}>
-            <Clock className="h-4 w-4 md:h-5 md:w-5" />
-            <span className="text-xl md:text-2xl font-bold animate-countdown">{timeLeft}s</span>
+          
+          {/* Timer Progress Bar */}
+          <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+            <div 
+              className={`h-full transition-all duration-1000 ease-linear ${getTimerColor()}`}
+              style={{ width: `${(timeLeft / 30) * 100}%` }}
+            />
           </div>
         </div>
 
@@ -97,24 +105,13 @@ export function QuestionCard({ question, onAnswer, questionNumber }: QuestionCar
           className="space-y-2 md:space-y-3"
         >
           {Object.entries(question.options).map(([key, value]) => {
-            const isCorrect = key === question.correct_answer;
             const isSelected = key === selectedAnswer;
-            
-            let optionClass = 'border-border';
-            if (showFeedback) {
-              if (isCorrect) {
-                optionClass = 'border-green-500 bg-green-500/10';
-              } else if (isSelected && !isCorrect) {
-                optionClass = 'border-destructive bg-destructive/10';
-              }
-            } else if (isSelected) {
-              optionClass = 'border-primary bg-primary/5';
-            }
+            const optionClass = isSelected ? 'border-primary bg-primary/5' : 'border-border';
 
             return (
               <div 
                 key={key} 
-                className={`flex items-center space-x-2 md:space-x-3 p-3 md:p-4 rounded-lg border-2 transition-all cursor-pointer hover:border-primary ${optionClass}`}
+                className={`flex items-center space-x-2 md:space-x-3 p-3 md:p-4 rounded-lg border-2 transition-all cursor-pointer hover:border-primary hover:bg-primary/5 ${optionClass}`}
                 onClick={() => !hasAnswered && setSelectedAnswer(key)}
               >
                 <RadioGroupItem value={key} id={key} className="border-primary shrink-0" />

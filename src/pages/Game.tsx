@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useWallet } from '@/contexts/WalletContext';
 import { QuestionCard } from '@/components/QuestionCard';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import Confetti from 'react-confetti';
-import { Trophy, X, Home, RotateCcw } from 'lucide-react';
+import { Trophy, Home, RotateCcw, Clock } from 'lucide-react';
 import { useWindowSize } from 'react-use';
 
 interface Question {
@@ -22,9 +23,12 @@ export default function Game() {
   const { walletAddress, credits, points, streak, refreshBalance } = useWallet();
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [userAnswers, setUserAnswers] = useState<string[]>([]);
   const [correctAnswers, setCorrectAnswers] = useState(0);
   const [gameState, setGameState] = useState<'loading' | 'playing' | 'win' | 'loss'>('loading');
   const [showConfetti, setShowConfetti] = useState(false);
+  const [globalTimeLeft, setGlobalTimeLeft] = useState(90);
+  const [gameStartTime, setGameStartTime] = useState<number | null>(null);
   const { width, height } = useWindowSize();
 
   useEffect(() => {
@@ -37,9 +41,33 @@ export default function Game() {
     loadQuestions();
   }, []);
 
+  // Global 90-second timer
+  useEffect(() => {
+    if (gameState !== 'playing' || !gameStartTime) return;
+
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+      const remaining = Math.max(0, 90 - elapsed);
+      setGlobalTimeLeft(remaining);
+
+      if (remaining === 0) {
+        // Force game end when global timer expires
+        handleGlobalTimeout();
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [gameState, gameStartTime]);
+
+  const handleGlobalTimeout = async () => {
+    const finalCorrect = await verifyAnswers(userAnswers);
+    setCorrectAnswers(finalCorrect);
+    await endGame(finalCorrect);
+  };
+
   const loadQuestions = async () => {
     try {
-      // Use questions_public view to prevent answer exposure
+      // Fetch questions with IDs only (no answers exposed to client)
       const { data, error } = await supabase
         .from('questions_public')
         .select('*')
@@ -58,11 +86,15 @@ export default function Game() {
       const selected = shuffled.slice(0, 3).map(q => ({
         ...q,
         options: q.options as Record<string, string>,
-        correct_answer: '' // Not available from public view
+        correct_answer: '' // Not exposed to client for security
       }));
       
       setQuestions(selected);
       setGameState('playing');
+      setGameStartTime(Date.now()); // Start global timer
+      setUserAnswers([]);
+      setCorrectAnswers(0);
+      setGlobalTimeLeft(90);
 
       // Deduct credit
       await deductCredit();
@@ -96,17 +128,46 @@ export default function Game() {
     }
   };
 
-  const handleAnswer = async (answer: string, isCorrect: boolean) => {
-    if (isCorrect) {
-      setCorrectAnswers(prev => prev + 1);
-    }
+  const handleAnswer = async (answer: string) => {
+    // Store user's answer
+    const newAnswers = [...userAnswers, answer];
+    setUserAnswers(newAnswers);
 
-    if (currentQuestion + 1 < questions.length) {
+    if (currentQuestion + 1 < questions.length && globalTimeLeft > 0) {
+      // Move to next question
       setCurrentQuestion(prev => prev + 1);
     } else {
-      // Game over
-      const finalCorrect = correctAnswers + (isCorrect ? 1 : 0);
+      // All questions answered or time expired - verify and end game
+      const finalCorrect = await verifyAnswers(newAnswers);
+      setCorrectAnswers(finalCorrect);
       await endGame(finalCorrect);
+    }
+  };
+
+  const verifyAnswers = async (answers: string[]): Promise<number> => {
+    try {
+      // Verify answers server-side to prevent cheating
+      const questionIds = questions.map(q => q.id);
+      
+      const { data, error } = await supabase
+        .from('questions')
+        .select('id, correct_answer')
+        .in('id', questionIds);
+
+      if (error) throw error;
+
+      let correct = 0;
+      answers.forEach((answer, index) => {
+        const question = data?.find(q => q.id === questions[index].id);
+        if (question && answer === question.correct_answer) {
+          correct++;
+        }
+      });
+
+      return correct;
+    } catch (error) {
+      console.error('Error verifying answers:', error);
+      return 0;
     }
   };
 
@@ -183,8 +244,16 @@ export default function Game() {
     // Reset game
     setCurrentQuestion(0);
     setCorrectAnswers(0);
+    setUserAnswers([]);
     setGameState('loading');
+    setGameStartTime(null);
     await loadQuestions();
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   if (gameState === 'loading') {
@@ -262,11 +331,30 @@ export default function Game() {
 
   return (
     <div className="min-h-screen bg-gradient-dark flex items-center justify-center p-3 md:p-4 overflow-x-hidden">
-      <div className="max-w-2xl w-full">
+      <div className="max-w-2xl w-full space-y-4">
+        {/* Global Timer HUD */}
+        <div className="bg-gradient-card border-2 border-border rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-muted-foreground">Total Time</span>
+            </div>
+            <span className={`text-2xl font-bold ${globalTimeLeft <= 30 ? 'text-destructive animate-pulse' : 'text-primary'}`}>
+              {formatTime(globalTimeLeft)}
+            </span>
+          </div>
+          <Progress 
+            value={(globalTimeLeft / 90) * 100} 
+            className="h-2"
+          />
+        </div>
+
+        {/* Question Card */}
         <QuestionCard
           question={questions[currentQuestion]}
           onAnswer={handleAnswer}
           questionNumber={currentQuestion + 1}
+          totalQuestions={3}
         />
       </div>
     </div>

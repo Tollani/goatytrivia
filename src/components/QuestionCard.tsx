@@ -24,6 +24,13 @@ export function QuestionCard({ question, onAnswer, questionNumber, totalQuestion
   const [hasAnswered, setHasAnswered] = useState(false);
 
   useEffect(() => {
+    // Reset state when question changes
+    setSelectedAnswer('');
+    setTimeLeft(30);
+    setHasAnswered(false);
+  }, [question.id]);
+
+  useEffect(() => {
     if (timeLeft === 0 && !hasAnswered) {
       handleAutoSubmit();
       return;

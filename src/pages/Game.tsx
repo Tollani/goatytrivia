@@ -351,6 +351,7 @@ export default function Game() {
 
         {/* Question Card */}
         <QuestionCard
+          key={currentQuestion} // Force remount for each question
           question={questions[currentQuestion]}
           onAnswer={handleAnswer}
           questionNumber={currentQuestion + 1}

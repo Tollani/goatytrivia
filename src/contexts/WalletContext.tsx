@@ -43,27 +43,55 @@ const updateCredits = (newCredits: number) => {
 
   const refreshBalance = async () => {
     if (!walletAddress) return;
-    // Ensure admin wallets have enough test credits (no-op for non-admins)
-    await (supabase as any).rpc('admin_ensure_test_credits', {
-      _wallet_address: walletAddress,
-      _chain: (chain || 'base'),
-      _threshold: 10,
-      _target: 100,
-    });
+    
+    try {
+      console.log('🔄 Refreshing balance for:', walletAddress);
+      
+      // Set wallet session first (critical for RLS)
+      const { error: sessionError } = await supabase.rpc('set_wallet_session', {
+        wallet_addr: walletAddress
+      });
+      
+      if (sessionError) {
+        console.error('❌ Session error:', sessionError);
+        throw sessionError;
+      }
 
-    // Fetch user profile via RPC to ensure RLS context within a single request
-    const { data, error } = await supabase.rpc('get_wallet_profile', {
-      _wallet_address: walletAddress,
-    });
+      // Ensure admin wallets have enough test credits (no-op for non-admins)
+      try {
+        await supabase.rpc('admin_ensure_test_credits', {
+          _wallet_address: walletAddress,
+          _chain: (chain || 'base'),
+          _threshold: 10,
+          _target: 100,
+        });
+      } catch (err) {
+        console.log('Admin credits check (optional):', err);
+      }
 
-    if (error) return;
+      // Fetch user profile via RPC to ensure RLS context within a single request
+      const { data, error } = await supabase.rpc('get_wallet_profile', {
+        _wallet_address: walletAddress,
+      });
 
-    const row: any = Array.isArray(data) ? data[0] : data;
-    if (row) {
-      setBalance(Number(row.balance ?? 0));
-      setCredits(Number(row.credits ?? 0));
-      setPoints(Number(row.points ?? 0));
-      setStreak(Number(row.streak ?? 0));
+      if (error) {
+        console.error('❌ Profile fetch error:', error);
+        throw error;
+      }
+
+      const row: any = Array.isArray(data) ? data[0] : data;
+      if (row) {
+        console.log('✅ Balance data:', row);
+        setBalance(Number(row.balance ?? 0));
+        setCredits(Number(row.credits ?? 0));
+        setPoints(Number(row.points ?? 0));
+        setStreak(Number(row.streak ?? 0));
+      } else {
+        console.warn('⚠️ No profile data returned, user might not exist yet');
+      }
+    } catch (error) {
+      console.error('❌ refreshBalance failed:', error);
+      toast.error('Failed to fetch wallet data');
     }
   };
 
@@ -80,32 +108,50 @@ const updateCredits = (newCredits: number) => {
             const response = await window.solana.connect();
             const address = response.publicKey.toString();
             
+            console.log('🔌 Connected Solana wallet:', address);
             setWalletAddress(address);
 
-            // Create or update user in database
-            const { data: existingUser } = await supabase
-              .from('users')
-              .select('*')
-              .eq('wallet_address', address)
-              .single();
-
-            if (!existingUser) {
-              await supabase.from('users').insert({
-                wallet_address: address,
-                chain: 'solana',
-              });
-            }
-
-            // Set wallet session immediately after connecting
+            // Set wallet session FIRST (required for RLS)
             await supabase.rpc('set_wallet_session', {
               wallet_addr: address
             });
-            
+
+            // Create or update user in database
+            const { data: existingUser, error: selectError } = await supabase
+              .from('users')
+              .select('*')
+              .eq('wallet_address', address)
+              .maybeSingle();
+
+            if (selectError) {
+              console.error('❌ Error checking user:', selectError);
+            }
+
+            if (!existingUser) {
+              console.log('👤 Creating new user...');
+              const { error: insertError } = await supabase.from('users').insert({
+                wallet_address: address,
+                chain: 'solana',
+              });
+              
+              if (insertError) {
+                console.error('❌ Error creating user:', insertError);
+                throw new Error('Failed to create user account');
+              }
+              console.log('✅ User created successfully');
+            } else {
+              console.log('✅ User already exists');
+            }
+
             toast.success(`Connected to Solana: ${truncateAddress(address)}`);
+            
+            // Wait a bit for database to sync
+            await new Promise(resolve => setTimeout(resolve, 500));
             await refreshBalance();
             return;
           } catch (error) {
             console.error('Wallet connection error:', error);
+            toast.error('Failed to connect wallet');
           }
         }
 
@@ -148,32 +194,50 @@ const updateCredits = (newCredits: number) => {
             const accounts = await provider.send('eth_requestAccounts', []);
             const address = accounts[0].toLowerCase(); // Normalize EVM addresses
             
+            console.log('🔌 Connected Base wallet:', address);
             setWalletAddress(address);
 
-            // Create or update user in database
-            const { data: existingUser } = await supabase
-              .from('users')
-              .select('*')
-              .eq('wallet_address', address)
-              .single();
-
-            if (!existingUser) {
-              await supabase.from('users').insert({
-                wallet_address: address,
-                chain: 'base',
-              });
-            }
-
-            // Set wallet session immediately after connecting
+            // Set wallet session FIRST (required for RLS)
             await supabase.rpc('set_wallet_session', {
               wallet_addr: address
             });
+
+            // Create or update user in database
+            const { data: existingUser, error: selectError } = await supabase
+              .from('users')
+              .select('*')
+              .eq('wallet_address', address)
+              .maybeSingle();
+
+            if (selectError) {
+              console.error('❌ Error checking user:', selectError);
+            }
+
+            if (!existingUser) {
+              console.log('👤 Creating new user...');
+              const { error: insertError } = await supabase.from('users').insert({
+                wallet_address: address,
+                chain: 'base',
+              });
+              
+              if (insertError) {
+                console.error('❌ Error creating user:', insertError);
+                throw new Error('Failed to create user account');
+              }
+              console.log('✅ User created successfully');
+            } else {
+              console.log('✅ User already exists');
+            }
             
             toast.success(`Connected to Base: ${truncateAddress(address)}`);
+            
+            // Wait a bit for database to sync
+            await new Promise(resolve => setTimeout(resolve, 500));
             await refreshBalance();
             return;
           } catch (error) {
             console.error('Wallet connection error:', error);
+            toast.error('Failed to connect wallet');
           }
         }
 

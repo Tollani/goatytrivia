@@ -5,6 +5,8 @@ import { DollarSign, Zap, Trophy, Flame } from 'lucide-react';
 export function BalanceHUD() {
   const { balance, credits, points, streak } = useWallet();
 
+  console.log('📊 BalanceHUD render:', { balance, credits, points, streak });
+
   return (
     <Card className="bg-gradient-card border-2 border-primary p-3 md:p-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">

@@ -19,7 +19,7 @@ interface QuestionCardProps {
 
 export function QuestionCard({ question, onAnswer, questionNumber }: QuestionCardProps) {
   const [selectedAnswer, setSelectedAnswer] = useState<string>('');
-  const [timeLeft, setTimeLeft] = useState(5);
+  const [timeLeft, setTimeLeft] = useState(30);
   const [hasAnswered, setHasAnswered] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
 

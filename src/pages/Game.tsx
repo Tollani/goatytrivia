@@ -222,17 +222,17 @@ export default function Game() {
             </p>
           )}
 
-          {gameState === 'win' && credits >= 1 && (
+          {credits >= 1 && (
             <div className="p-4 bg-primary/10 border-2 border-primary rounded-lg">
               <p className="text-sm text-muted-foreground mb-3">
-                Play Again? (1 Credit)
+                {gameState === 'win' ? 'Play Again?' : 'Try Again?'} (1 Credit)
               </p>
               <Button 
                 onClick={handleReinvest}
                 className="bg-gradient-primary text-black font-bold w-full"
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
-                Yes, Let's GOAT!
+                {gameState === 'win' ? "Yes, Let's GOAT!" : 'Play Again'}
               </Button>
             </div>
           )}

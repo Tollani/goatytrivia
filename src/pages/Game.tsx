@@ -27,7 +27,7 @@ export default function Game() {
   const [correctAnswers, setCorrectAnswers] = useState(0);
   const [gameState, setGameState] = useState<'loading' | 'playing' | 'win' | 'loss'>('loading');
   const [showConfetti, setShowConfetti] = useState(false);
-  const [globalTimeLeft, setGlobalTimeLeft] = useState(90);
+  const [globalTimeLeft, setGlobalTimeLeft] = useState(30);
   const [gameStartTime, setGameStartTime] = useState<number | null>(null);
   const { width, height } = useWindowSize();
 
@@ -47,7 +47,7 @@ export default function Game() {
 
     const interval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
-      const remaining = Math.max(0, 90 - elapsed);
+      const remaining = Math.max(0, 30 - elapsed);
       setGlobalTimeLeft(remaining);
 
       if (remaining === 0) {
@@ -94,9 +94,9 @@ export default function Game() {
       setGameStartTime(Date.now()); // Start global timer
       setUserAnswers([]);
       setCorrectAnswers(0);
-      setGlobalTimeLeft(90);
+      setGlobalTimeLeft(30);
 
-      // Deduct credit
+      // Deduct credit immediately when game starts
       await deductCredit();
     } catch (error) {
       console.error('Error loading questions:', error);
@@ -344,7 +344,7 @@ export default function Game() {
             </span>
           </div>
           <Progress 
-            value={(globalTimeLeft / 90) * 100} 
+            value={(globalTimeLeft / 30) * 100} 
             className="h-2"
           />
         </div>

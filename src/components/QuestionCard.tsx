@@ -20,13 +20,13 @@ interface QuestionCardProps {
 
 export function QuestionCard({ question, onAnswer, questionNumber, totalQuestions }: QuestionCardProps) {
   const [selectedAnswer, setSelectedAnswer] = useState<string>('');
-  const [timeLeft, setTimeLeft] = useState(30);
+  const [timeLeft, setTimeLeft] = useState(10);
   const [hasAnswered, setHasAnswered] = useState(false);
 
   useEffect(() => {
     // Reset state when question changes
     setSelectedAnswer('');
-    setTimeLeft(30);
+    setTimeLeft(10);
     setHasAnswered(false);
   }, [question.id]);
 
@@ -96,7 +96,7 @@ export function QuestionCard({ question, onAnswer, questionNumber, totalQuestion
           <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
             <div 
               className={`h-full transition-all duration-1000 ease-linear ${getTimerColor()}`}
-              style={{ width: `${(timeLeft / 30) * 100}%` }}
+              style={{ width: `${(timeLeft / 10) * 100}%` }}
             />
           </div>
         </div>

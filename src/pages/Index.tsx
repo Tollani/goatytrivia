@@ -115,7 +115,7 @@ export default function Index() {
                   <Button
                     variant="outline"
                     size="lg"
-                    onClick={() => window.open('https://discord.gg/goaty', '_blank')}
+                    onClick={() => window.open('https://discord.gg/3mPqT6Pt', '_blank')}
                     className="neon-border h-14"
                   >
                     <Users className="mr-2 h-5 w-5" />

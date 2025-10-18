@@ -158,7 +158,7 @@ export function ClaimVoucher() {
               </div>
 
               <Button 
-                onClick={() => window.open('https://discord.gg/goaty', '_blank')}
+                onClick={() => window.open('https://discord.gg/3mPqT6Pt', '_blank')}
                 className="w-full bg-gradient-primary text-black font-bold"
               >
                 Open Discord to Redeem

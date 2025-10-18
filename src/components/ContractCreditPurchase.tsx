@@ -88,9 +88,9 @@ export function ContractCreditPurchase() {
       </Button>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="bg-gradient-card border-primary max-w-md">
+        <DialogContent className="bg-gradient-card border-primary max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="neon-text text-2xl flex items-center gap-2">
+            <DialogTitle className="neon-text text-xl md:text-2xl flex items-center gap-2 flex-wrap">
               Buy GOAT Credits
               <Badge variant="outline" className="text-xs">
                 {chain === 'solana' ? 'Solana SPL' : 'Base ERC20'}
@@ -98,7 +98,7 @@ export function ContractCreditPurchase() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-6">
+          <div className="space-y-4 md:space-y-6">
             {/* Purchase Info */}
             <div className="text-center p-4 bg-primary/10 rounded-lg border-2 border-primary">
               <div className="text-4xl font-bold neon-text mb-2">${totalCost.toFixed(2)} USDC</div>

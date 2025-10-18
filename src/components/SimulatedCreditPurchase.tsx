@@ -143,9 +143,9 @@ export function SimulatedCreditPurchase() {
       </Button>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="bg-gradient-card border-primary max-w-md">
+        <DialogContent className="bg-gradient-card border-primary max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="neon-text text-2xl flex items-center gap-2">
+            <DialogTitle className="neon-text text-xl md:text-2xl flex items-center gap-2 flex-wrap">
               Buy GOAT Credits
               {TEST_MODE ? (
                 <Badge variant="outline" className="text-xs bg-yellow-500/20 border-yellow-500">
@@ -160,7 +160,7 @@ export function SimulatedCreditPurchase() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-6">
+          <div className="space-y-4 md:space-y-6">
             {/* Test Mode Notice */}
             {TEST_MODE && (
               <div className="p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg">

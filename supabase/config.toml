@@ -1,1 +1,4 @@
 project_id = "kbaothotqmfsoxxywldq"
+
+[functions.upload-questions]
+verify_jwt = false

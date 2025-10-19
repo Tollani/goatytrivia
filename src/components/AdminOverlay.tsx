@@ -1,22 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { Shield, Upload, Users, CheckCircle, DollarSign } from 'lucide-react';
+import { Shield, Upload, Users, CheckCircle, DollarSign, FileText } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
 
 export function AdminOverlay() {
   const { walletAddress } = useWallet();
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [csvData, setCsvData] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [users, setUsers] = useState<any[]>([]);
   const [pendingPurchases, setPendingPurchases] = useState<any[]>([]);
   const [pendingClaims, setPendingClaims] = useState<any[]>([]);
+  const [questionCount, setQuestionCount] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check admin status server-side
   useEffect(() => {
@@ -66,33 +71,96 @@ export function AdminOverlay() {
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
     setPendingClaims(claimsData || []);
+
+    // Load question count
+    const { count } = await supabase
+      .from('questions')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .gte('expiry_date', new Date().toISOString().split('T')[0]);
+    setQuestionCount(count || 0);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = ['text/csv', 'application/json', 'text/plain'];
+    if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|json)$/)) {
+      toast.error('Invalid file type. Use CSV or JSON only.');
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) { // 2MB limit
+      toast.error('File too large. Max 2MB.');
+      return;
+    }
+
+    setSelectedFile(file);
+    toast.success(`Selected: ${file.name}`);
   };
 
   const handleUploadQuestions = async () => {
-    try {
-      // Parse CSV (format: text,category,correct_answer,option_a,option_b,option_c,option_d)
-      const lines = csvData.trim().split('\n');
-      const questions = lines.map(line => {
-        const [text, category, correct, a, b, c, d] = line.split(',').map(s => s.trim());
-        return {
-          text,
-          category: category as 'CT' | 'Web3' | 'News',
-          correct_answer: correct,
-          options: { a, b, c, d },
-          is_active: true,
-          expiry_date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        };
-      });
+    if (!selectedFile || !walletAddress) {
+      toast.error('Please select a file first');
+      return;
+    }
 
-      const { error } = await supabase.from('questions').insert(questions);
+    setUploading(true);
+    setUploadProgress(20);
+
+    try {
+      const format = selectedFile.name.endsWith('.json') ? 'json' : 'csv';
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('format', format);
+      formData.append('wallet_address', walletAddress);
+
+      setUploadProgress(40);
+
+      const { data: { session } } = await supabase.auth.getSession();
       
-      if (error) throw error;
-      
-      toast.success(`Added ${questions.length} questions!`);
-      setCsvData('');
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-questions`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: formData,
+        }
+      );
+
+      setUploadProgress(80);
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+
+      setUploadProgress(100);
+
+      if (result.errors && result.errors.length > 0) {
+        toast.warning(
+          `Uploaded ${result.inserted} questions with ${result.total_errors} errors. Check console for details.`,
+          { duration: 5000 }
+        );
+        console.log('Upload errors:', result.errors);
+      } else {
+        toast.success(`✅ Uploaded ${result.inserted} Questions! New GOAT Bait Ready.`);
+      }
+
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      await loadAdminData();
+
     } catch (error: any) {
       console.error('Upload error:', error);
-      toast.error('Failed to upload questions');
+      toast.error(error.message || 'Failed to upload questions');
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -183,20 +251,60 @@ export function AdminOverlay() {
 
             <TabsContent value="questions" className="space-y-4">
               <Card className="p-4 bg-background/50">
-                <div className="flex items-center gap-2 mb-3">
-                  <Upload className="h-5 w-5 text-primary" />
-                  <h3 className="font-bold">Upload Questions (CSV)</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Upload className="h-5 w-5 text-primary" />
+                    <h3 className="font-bold">Upload Questions</h3>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Active: {questionCount}
+                  </div>
                 </div>
-                <Textarea
-                  value={csvData}
-                  onChange={(e) => setCsvData(e.target.value)}
-                  placeholder="text,category,correct,option_a,option_b,option_c,option_d&#10;Example:&#10;Which token hit ATH?,ct,b,BTC,SOL,ETH,DOGE"
-                  rows={8}
-                  className="font-mono text-xs mb-3"
-                />
-                <Button onClick={handleUploadQuestions} className="w-full">
-                  Upload Questions
-                </Button>
+
+                <div className="space-y-3">
+                  <div className="bg-background/30 p-3 rounded-md text-xs space-y-1">
+                    <p className="text-muted-foreground font-semibold">CSV Format (comma-separated):</p>
+                    <code className="block text-primary">text,category,correct,a,b,c,d,source_url</code>
+                    <p className="text-muted-foreground mt-2">Example:</p>
+                    <code className="block">Which GOAT meme won 2024?,ct,b,Pepe,Goatseus,Doge,Wojak,twitter.com</code>
+                    <p className="text-muted-foreground mt-2">
+                      Categories: <span className="text-primary">ct, web3, news</span> | 
+                      Correct: <span className="text-primary">a, b, c, d</span> | 
+                      Max 200 rows
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".csv,.json"
+                      onChange={handleFileSelect}
+                      disabled={uploading}
+                      className="cursor-pointer"
+                    />
+                    {selectedFile && (
+                      <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                    )}
+                  </div>
+
+                  {uploading && (
+                    <div className="space-y-2">
+                      <Progress value={uploadProgress} className="h-2" />
+                      <p className="text-xs text-center text-muted-foreground">
+                        Processing... {uploadProgress}%
+                      </p>
+                    </div>
+                  )}
+
+                  <Button 
+                    onClick={handleUploadQuestions} 
+                    disabled={!selectedFile || uploading}
+                    className="w-full"
+                  >
+                    {uploading ? 'Uploading...' : 'Upload Questions'}
+                  </Button>
+                </div>
               </Card>
             </TabsContent>
 

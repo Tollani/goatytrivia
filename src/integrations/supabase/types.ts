@@ -411,7 +411,7 @@ export type Database = {
       app_role: "admin" | "user"
       blockchain_chain: "solana" | "base"
       purchase_status: "pending" | "confirmed" | "rejected"
-      question_category: "CT" | "Web3" | "News"
+      question_category: "CT" | "Web3" | "News" | "ct" | "web3" | "news"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -542,7 +542,7 @@ export const Constants = {
       app_role: ["admin", "user"],
       blockchain_chain: ["solana", "base"],
       purchase_status: ["pending", "confirmed", "rejected"],
-      question_category: ["CT", "Web3", "News"],
+      question_category: ["CT", "Web3", "News", "ct", "web3", "news"],
     },
   },
 } as const

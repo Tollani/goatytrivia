@@ -107,27 +107,45 @@ export default function Game() {
 
   const deductCredit = async () => {
     if (!walletAddress) return;
+const verifyAnswers = async (answers: string[]): Promise<number> => {
+  try {
+    // Verify answers server-side to prevent cheating
+    const questionIds = questions.map(q => q.id);
+    
+    const { data, error } = await supabase
+      .from('questions')
+      .select('id, correct_answer')
+      .in('id', questionIds);
 
-    const { data: user } = await supabase
-      .from('users')
-      .select('id, credits, total_plays')
-      .eq('wallet_address', walletAddress)
-      .single();
+    if (error) throw error;
 
-    if (user) {
-      await supabase
-        .from('users')
-        .update({ 
-          credits: Math.max(0, user.credits - 1),
-          last_play: new Date().toISOString(),
-          total_plays: user.total_plays + 1
-        })
-        .eq('id', user.id);
+    let correct = 0;
+    answers.forEach((answer, index) => {
+      const question = data?.find(q => q.id === questions[index].id);
+      if (question) {
+        // Normalize to lowercase for case-insensitive match
+        const normalizedAnswer = answer.toLowerCase();
+        const normalizedCorrect = question.correct_answer.toLowerCase();
+        const isMatch = normalizedAnswer === normalizedCorrect;
+        
+        // Debug log (view in browser console F12 during play)
+        console.log(`Q${index + 1}: User '${answer}' (norm: '${normalizedAnswer}'), DB '${question.correct_answer}' (norm: '${normalizedCorrect}'), Match: ${isMatch}`);
+        
+        if (isMatch) {
+          correct++;
+        }
+      }
+    });
 
-      await refreshBalance();
-    }
-  };
+    // Log final score
+    console.log(`Final score: ${correct}/3 correct`);
 
+    return correct;
+  } catch (error) {
+    console.error('Error verifying answers:', error);
+    return 0;
+  }
+};
   const handleAnswer = async (answer: string) => {
     // Store user's answer
     const newAnswers = [...userAnswers, answer];

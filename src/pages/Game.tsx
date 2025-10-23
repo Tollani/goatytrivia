@@ -156,26 +156,40 @@ export default function Game() {
 
       if (error) throw error;
 
+      if (!data) {
+        console.error('No data returned from database');
+        return 0;
+      }
+
+      // Create a map for O(1) lookup by question ID
+      const correctAnswersMap = new Map(
+        data.map(q => [q.id, q.correct_answer])
+      );
+
       let correct = 0;
       answers.forEach((answer, index) => {
-        const question = data?.find(q => q.id === questions[index].id);
-        if (question) {
+        const questionId = questions[index].id;
+        const correctAnswer = correctAnswersMap.get(questionId);
+        
+        if (correctAnswer) {
           // Normalize to lowercase for case-insensitive match
           const normalizedAnswer = answer.toLowerCase().trim();
-          const normalizedCorrect = question.correct_answer.toLowerCase().trim();
+          const normalizedCorrect = correctAnswer.toLowerCase().trim();
           const isMatch = normalizedAnswer === normalizedCorrect;
           
           // Debug log (view in browser console F12 during play)
-          console.log(`Q${index + 1}: User '${answer}' (norm: '${normalizedAnswer}'), DB '${question.correct_answer}' (norm: '${normalizedCorrect}'), Match: ${isMatch}`);
+          console.log(`Q${index + 1} [${questionId}]: User '${answer}' (norm: '${normalizedAnswer}'), DB '${correctAnswer}' (norm: '${normalizedCorrect}'), Match: ${isMatch}`);
           
           if (isMatch) {
             correct++;
           }
+        } else {
+          console.error(`No correct answer found for question ID: ${questionId}`);
         }
       });
 
       // Log final score
-      console.log(`Final score: ${correct}/3 correct`);
+      console.log(`Final score: ${correct}/${answers.length} correct`);
 
       return correct;
     } catch (error) {

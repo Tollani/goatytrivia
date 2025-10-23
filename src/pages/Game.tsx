@@ -151,7 +151,7 @@ export default function Game() {
       
       const { data, error } = await supabase
         .from('questions')
-        .select('id, correct_answer')
+        .select('id, correct_answer, options')
         .in('id', questionIds);
 
       if (error) throw error;
@@ -163,22 +163,62 @@ export default function Game() {
 
       // Create a map for O(1) lookup by question ID
       const correctAnswersMap = new Map(
-        data.map(q => [q.id, q.correct_answer])
+        data.map(q => [q.id, { correct_answer: q.correct_answer, options: q.options as Record<string, string> }])
       );
 
       let correct = 0;
       answers.forEach((answer, index) => {
         const questionId = questions[index].id;
-        const correctAnswer = correctAnswersMap.get(questionId);
+        const questionData = correctAnswersMap.get(questionId);
         
-        if (correctAnswer) {
-          // Normalize to lowercase for case-insensitive match
+        if (questionData) {
+          const { correct_answer, options } = questionData;
+          
+          // Normalize user answer for comparison
           const normalizedAnswer = answer.toLowerCase().trim();
-          const normalizedCorrect = correctAnswer.toLowerCase().trim();
-          const isMatch = normalizedAnswer === normalizedCorrect;
+          
+          // Normalize the correct answer (could be "A", "a", or full text)
+          const normalizedCorrect = correct_answer.toLowerCase().trim();
+          
+          // Check multiple match scenarios:
+          let isMatch = false;
+          
+          // 1. Direct match (user answer matches correct answer exactly)
+          if (normalizedAnswer === normalizedCorrect) {
+            isMatch = true;
+          }
+          
+          // 2. If correct_answer is a key like "A", "B", "C", "D"
+          // Check if user's answer matches the text value of that key
+          if (!isMatch && options && options[correct_answer.toUpperCase()]) {
+            const correctAnswerText = options[correct_answer.toUpperCase()].toLowerCase().trim();
+            if (normalizedAnswer === correctAnswerText) {
+              isMatch = true;
+            }
+          }
+          
+          // 3. If user selected a key (like "A") and correct answer is also a key
+          if (!isMatch && normalizedAnswer.length === 1 && normalizedCorrect.length === 1) {
+            if (normalizedAnswer === normalizedCorrect) {
+              isMatch = true;
+            }
+          }
+          
+          // 4. If user selected text, check if it matches any option value where the key is the correct answer
+          if (!isMatch && options) {
+            Object.entries(options).forEach(([key, value]) => {
+              if (key.toLowerCase() === normalizedCorrect && value.toLowerCase().trim() === normalizedAnswer) {
+                isMatch = true;
+              }
+            });
+          }
           
           // Debug log (view in browser console F12 during play)
-          console.log(`Q${index + 1} [${questionId}]: User '${answer}' (norm: '${normalizedAnswer}'), DB '${correctAnswer}' (norm: '${normalizedCorrect}'), Match: ${isMatch}`);
+          console.log(`Q${index + 1} [${questionId}]:`);
+          console.log(`  User answer: '${answer}' (normalized: '${normalizedAnswer}')`);
+          console.log(`  Correct answer: '${correct_answer}' (normalized: '${normalizedCorrect}')`);
+          console.log(`  Options:`, options);
+          console.log(`  Match: ${isMatch}`);
           
           if (isMatch) {
             correct++;

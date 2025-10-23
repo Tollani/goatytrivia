@@ -253,52 +253,98 @@ export default function Game() {
 
     try {
       // Get user data
-      const { data: user } = await supabase
+      const { data: user, error: fetchError } = await supabase
         .from('users')
-        .select('id, balance, points, streak, total_wins')
+        .select('id, balance, points, streak, total_wins, total_plays')
         .eq('wallet_address', walletAddress)
         .single();
 
+      if (fetchError) {
+        console.error('Error fetching user:', fetchError);
+        toast.error('Failed to update game results');
+        return;
+      }
+
       if (user) {
+        // Calculate new values
+        const newBalance = Number((user.balance + earnings).toFixed(2));
+        const newPoints = won ? user.points + 1 : user.points;
+        const newStreak = won ? user.streak + 1 : 0;
+        const newTotalWins = won ? user.total_wins + 1 : user.total_wins;
+
+        console.log('Updating user stats:', {
+          oldBalance: user.balance,
+          newBalance,
+          oldPoints: user.points,
+          newPoints,
+          oldStreak: user.streak,
+          newStreak,
+          won
+        });
+
         // Update balance, points, streak, and stats
         const updates: any = {
-          balance: user.balance + earnings,
+          balance: newBalance,
+          points: newPoints,
+          streak: newStreak,
+          total_wins: newTotalWins,
         };
         
         if (won) {
-          updates.total_wins = user.total_wins + 1;
-          updates.points = user.points + 1;
-          updates.streak = user.streak + 1;
           updates.last_win = new Date().toISOString();
-        } else {
-          updates.streak = 0; // Reset streak on loss
         }
 
-        await supabase
+        const { error: updateError } = await supabase
           .from('users')
           .update(updates)
           .eq('id', user.id);
 
-        // Record game history
-        await supabase.from('game_history').insert({
-          user_id: user.id,
-          wallet_address: walletAddress,
-          questions_attempted: 3,
-          questions_correct: finalCorrect,
-          outcome: won ? 'win' : 'loss',
-          earnings,
-        });
+        if (updateError) {
+          console.error('Error updating user:', updateError);
+          toast.error('Failed to update your stats');
+          return;
+        }
 
+        // Record game history
+        const { error: historyError } = await supabase
+          .from('game_history')
+          .insert({
+            user_id: user.id,
+            wallet_address: walletAddress,
+            questions_attempted: 3,
+            questions_correct: finalCorrect,
+            outcome: won ? 'win' : 'loss',
+            earnings,
+          });
+
+        if (historyError) {
+          console.error('Error recording game history:', historyError);
+        }
+
+        // Wait a moment for database to fully commit
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Refresh balance from context
         await refreshBalance();
 
+        // Verify the update
+        const { data: updatedUser } = await supabase
+          .from('users')
+          .select('balance, points, streak')
+          .eq('wallet_address', walletAddress)
+          .single();
+
+        console.log('Updated user data:', updatedUser);
+
         if (won) {
-          toast.success(`🎉 GOAT WIN! +$${earnings.toFixed(2)}`);
+          toast.success(`🎉 GOAT WIN! +${earnings.toFixed(2)} | Points: ${newPoints}`);
         } else {
           toast.error('Not quite GOAT level... Try again!');
         }
       }
     } catch (error) {
       console.error('Error ending game:', error);
+      toast.error('An error occurred. Please refresh the page.');
     }
   };
 

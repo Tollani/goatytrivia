@@ -3,18 +3,6 @@ import { useWallet } from '@/contexts/WalletContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-  // In your Dialog JSX
-<Dialog>
-  <DialogContent aria-describedby="upload-description"> {/* Add this prop */}
-    <DialogHeader>
-      <DialogTitle>Upload Questions CSV</DialogTitle>
-      <DialogDescription id="upload-description"> {/* Hidden desc for a11y */}
-        Select a CSV file with columns: text,category,correct,a,b,c,d,source_url
-      </DialogDescription>
-    </DialogHeader>
-    {/* Your file input + upload button */}
-  </DialogContent>
-</Dialog>;
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Shield, Upload, Users, CheckCircle, DollarSign, FileText } from 'lucide-react';

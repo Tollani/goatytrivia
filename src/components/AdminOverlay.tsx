@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Shield, Upload, Users, CheckCircle, DollarSign, FileText } from 'lucide-react';
@@ -233,12 +233,18 @@ export function AdminOverlay() {
       </Button>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="bg-gradient-card border-primary max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent 
+          className="bg-gradient-card border-primary max-w-4xl max-h-[90vh] overflow-y-auto"
+          aria-describedby="admin-description"
+        >
           <DialogHeader>
             <DialogTitle className="neon-text text-2xl flex items-center gap-2">
               <Shield className="h-6 w-6" />
               GOAT Admin Panel
             </DialogTitle>
+            <DialogDescription id="admin-description" className="sr-only">
+              Admin panel for managing questions, users, purchases, and claims in the GOATY game.
+            </DialogDescription>
           </DialogHeader>
 
           <Tabs defaultValue="questions" className="w-full">

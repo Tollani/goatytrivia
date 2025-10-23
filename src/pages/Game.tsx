@@ -160,17 +160,19 @@ export default function Game() {
       answers.forEach((answer, index) => {
         const question = data?.find(q => q.id === questions[index].id);
         if (question) {
-          // Normalize to lowercase for case-insensitive match
+          // Normalize to lowercase for case-insensitive match, handling 'a' vs 'A' or first option issues
           const normalizedAnswer = answer.toLowerCase().trim();
           const normalizedCorrect = question.correct_answer.toLowerCase().trim();
           const isMatch = normalizedAnswer === normalizedCorrect;
           
-          // Debug log (view in browser console F12 during play)
-          console.log(`Q${index + 1}: User '${answer}' (norm: '${normalizedAnswer}'), DB '${question.correct_answer}' (norm: '${normalizedCorrect}'), Match: ${isMatch}`);
+          // Enhanced debug log for first option issues
+          console.log(`Q${index + 1}: User raw '${answer}', Norm '${normalizedAnswer}', DB raw '${question.correct_answer}', Norm '${normalizedCorrect}', Match: ${isMatch}`);
           
           if (isMatch) {
             correct++;
           }
+        } else {
+          console.warn(`Q${index + 1}: No question found for ID ${questions[index].id}`);
         }
       });
 
@@ -341,6 +343,10 @@ export default function Game() {
       </div>
     );
   }
+
+  return (
+    <div className="min-h-screen bg-gradient-dark flex items-center justify-center p-3 md:p-4 overflow-x-hidden">
+      <div className="max-w-2xl w-full space
 
   return (
     <div className="min-h-screen bg-gradient-dark flex items-center justify-center p-3 md:p-4 overflow-x-hidden">

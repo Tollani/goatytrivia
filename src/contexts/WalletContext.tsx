@@ -45,7 +45,8 @@ const updateCredits = (newCredits: number) => {
     if (!walletAddress) return;
     
     try {
-      console.log('🔄 Refreshing balance for:', walletAddress);
+      const timestamp = Date.now();
+      console.log('🔄 Refreshing balance for:', walletAddress, 'at', timestamp);
       
       // Set wallet session first (critical for RLS)
       const { error: sessionError } = await supabase.rpc('set_wallet_session', {
@@ -69,23 +70,56 @@ const updateCredits = (newCredits: number) => {
         console.log('Admin credits check (optional):', err);
       }
 
-      // Fetch user profile via RPC to ensure RLS context within a single request
-      const { data, error } = await supabase.rpc('get_wallet_profile', {
-        _wallet_address: walletAddress,
-      });
+      // CRITICAL FIX: Bypass RPC and fetch directly from users table
+      // This ensures we always get fresh data without any caching
+      const { data, error } = await supabase
+        .from('users')
+        .select('balance, credits, points, streak')
+        .eq('wallet_address', walletAddress)
+        .single();
 
       if (error) {
         console.error('❌ Profile fetch error:', error);
-        throw error;
+        
+        // Fallback to RPC if direct query fails
+        const { data: rpcData, error: rpcError } = await supabase.rpc('get_wallet_profile', {
+          _wallet_address: walletAddress,
+        });
+
+        if (rpcError) {
+          console.error('❌ RPC fallback error:', rpcError);
+          throw rpcError;
+        }
+
+        const row: any = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+        if (row) {
+          console.log('✅ Balance data (via RPC fallback):', row);
+          setBalance(Number(row.balance ?? 0));
+          setCredits(Number(row.credits ?? 0));
+          setPoints(Number(row.points ?? 0));
+          setStreak(Number(row.streak ?? 0));
+        }
+        return;
       }
 
-      const row: any = Array.isArray(data) ? data[0] : data;
-      if (row) {
-        console.log('✅ Balance data:', row);
-        setBalance(Number(row.balance ?? 0));
-        setCredits(Number(row.credits ?? 0));
-        setPoints(Number(row.points ?? 0));
-        setStreak(Number(row.streak ?? 0));
+      if (data) {
+        console.log('✅ Fresh balance data:', data, 'fetched at', timestamp);
+        console.log('📊 State update:', {
+          oldBalance: balance,
+          newBalance: Number(data.balance ?? 0),
+          oldCredits: credits,
+          newCredits: Number(data.credits ?? 0),
+          oldPoints: points,
+          newPoints: Number(data.points ?? 0),
+          oldStreak: streak,
+          newStreak: Number(data.streak ?? 0)
+        });
+        
+        // Force state updates even if values appear the same
+        setBalance(Number(data.balance ?? 0));
+        setCredits(Number(data.credits ?? 0));
+        setPoints(Number(data.points ?? 0));
+        setStreak(Number(data.streak ?? 0));
       } else {
         console.warn('⚠️ No profile data returned, user might not exist yet');
       }

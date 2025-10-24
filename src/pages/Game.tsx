@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWallet } from '@/contexts/WalletContext';
 import { QuestionCard } from '@/components/QuestionCard';
@@ -18,6 +18,12 @@ interface Question {
   category: string;
 }
 
+interface GameSession {
+  sessionId: string;
+  creditDeducted: boolean;
+  gameEnded: boolean;
+}
+
 export default function Game() {
   const navigate = useNavigate();
   const { walletAddress, credits, points, streak, refreshBalance } = useWallet();
@@ -30,6 +36,14 @@ export default function Game() {
   const [globalTimeLeft, setGlobalTimeLeft] = useState(30);
   const [gameStartTime, setGameStartTime] = useState<number | null>(null);
   const { width, height } = useWindowSize();
+  
+  // Use refs to prevent double execution
+  const gameSessionRef = useRef<GameSession>({
+    sessionId: '',
+    creditDeducted: false,
+    gameEnded: false
+  });
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
     if (!walletAddress || credits < 1) {
@@ -38,13 +52,8 @@ export default function Game() {
       return;
     }
 
-    loadQuestions();
+    initializeGame();
   }, []);
-
-  // Watch for balance/points updates from context
-  useEffect(() => {
-    console.log('Context updated:', { credits, points, walletAddress });
-  }, [credits, points, walletAddress]);
 
   // Global 30-second timer
   useEffect(() => {
@@ -55,8 +64,7 @@ export default function Game() {
       const remaining = Math.max(0, 30 - elapsed);
       setGlobalTimeLeft(remaining);
 
-      if (remaining === 0) {
-        // Force game end when global timer expires
+      if (remaining === 0 && !gameSessionRef.current.gameEnded) {
         handleGlobalTimeout();
       }
     }, 100);
@@ -64,15 +72,29 @@ export default function Game() {
     return () => clearInterval(interval);
   }, [gameState, gameStartTime]);
 
+  const initializeGame = async () => {
+    // Generate unique session ID
+    gameSessionRef.current = {
+      sessionId: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      creditDeducted: false,
+      gameEnded: false
+    };
+
+    await loadQuestions();
+  };
+
   const handleGlobalTimeout = async () => {
+    if (isProcessingRef.current || gameSessionRef.current.gameEnded) return;
+    
+    isProcessingRef.current = true;
     const finalCorrect = await verifyAnswers(userAnswers);
     setCorrectAnswers(finalCorrect);
     await endGame(finalCorrect);
+    isProcessingRef.current = false;
   };
 
   const loadQuestions = async () => {
     try {
-      // Fetch questions with IDs only (no answers exposed to client)
       const { data, error } = await supabase
         .from('questions_public')
         .select('*')
@@ -91,18 +113,27 @@ export default function Game() {
       const selected = shuffled.slice(0, 3).map(q => ({
         ...q,
         options: q.options as Record<string, string>,
-        correct_answer: '' // Not exposed to client for security
+        correct_answer: ''
       }));
       
       setQuestions(selected);
-      setGameState('playing');
-      setGameStartTime(Date.now()); // Start global timer
       setUserAnswers([]);
       setCorrectAnswers(0);
       setGlobalTimeLeft(30);
+      
+      // Deduct credit FIRST before starting the game
+      const creditDeducted = await deductCreditWithRetry();
+      
+      if (!creditDeducted) {
+        toast.error('Failed to start game. Please try again.');
+        navigate('/');
+        return;
+      }
 
-      // Deduct credit immediately when game starts
-      await deductCredit();
+      // Only start game after successful credit deduction
+      setGameState('playing');
+      setGameStartTime(Date.now());
+      
     } catch (error) {
       console.error('Error loading questions:', error);
       toast.error('Failed to load questions');
@@ -110,26 +141,41 @@ export default function Game() {
     }
   };
 
-  const deductCredit = async () => {
-    if (!walletAddress) return;
+  const deductCreditWithRetry = async (maxRetries = 3): Promise<boolean> => {
+    if (!walletAddress || gameSessionRef.current.creditDeducted) {
+      return gameSessionRef.current.creditDeducted;
+    }
 
-    try {
-      const { data: user, error: fetchError } = await supabase
-        .from('users')
-        .select('id, credits, total_plays')
-        .eq('wallet_address', walletAddress)
-        .single();
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`💳 Credit deduction attempt ${attempt}/${maxRetries}`);
 
-      if (fetchError) {
-        console.error('Error fetching user for credit deduction:', fetchError);
-        return;
-      }
+        // Use a transaction-like approach: fetch latest, then update with check
+        const { data: user, error: fetchError } = await supabase
+          .from('users')
+          .select('id, credits, total_plays')
+          .eq('wallet_address', walletAddress)
+          .single();
 
-      if (user) {
-        const newCredits = Math.max(0, user.credits - 1);
+        if (fetchError) {
+          console.error(`❌ Fetch error on attempt ${attempt}:`, fetchError);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          return false;
+        }
+
+        if (!user || user.credits < 1) {
+          console.error('❌ Insufficient credits');
+          toast.error('Insufficient credits');
+          return false;
+        }
+
+        const newCredits = user.credits - 1;
         const newTotalPlays = user.total_plays + 1;
 
-        console.log('Deducting credit:', {
+        console.log('💾 Deducting credit:', {
           oldCredits: user.credits,
           newCredits,
           totalPlays: newTotalPlays
@@ -142,41 +188,75 @@ export default function Game() {
             last_play: new Date().toISOString(),
             total_plays: newTotalPlays
           })
-          .eq('id', user.id);
+          .eq('id', user.id)
+          .eq('credits', user.credits); // Optimistic locking - only update if credits haven't changed
 
         if (updateError) {
-          console.error('Error updating credits:', updateError);
-          return;
+          console.error(`❌ Update error on attempt ${attempt}:`, updateError);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          return false;
         }
 
-        // CRITICAL: Wait for DB commit + refresh with retries
-        await new Promise(resolve => setTimeout(resolve, 800));
-        await refreshBalance();
+        // Verify the deduction succeeded
+        const verified = await verifyDatabaseUpdate(
+          walletAddress,
+          { credits: newCredits },
+          3,
+          400
+        );
+
+        if (verified) {
+          gameSessionRef.current.creditDeducted = true;
+          
+          // Refresh balance in context
+          await refreshBalance();
+          
+          console.log('✅ Credit deducted successfully');
+          return true;
+        }
+
+        if (attempt < maxRetries) {
+          console.warn(`⚠️ Verification failed on attempt ${attempt}, retrying...`);
+          await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+        }
+        
+      } catch (error) {
+        console.error(`❌ Exception on attempt ${attempt}:`, error);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+          continue;
+        }
+        return false;
       }
-    } catch (error) {
-      console.error('Error in deductCredit:', error);
     }
+
+    return false;
   };
 
   const handleAnswer = async (answer: string) => {
-    // Store user's answer
+    if (gameSessionRef.current.gameEnded) return;
+
     const newAnswers = [...userAnswers, answer];
     setUserAnswers(newAnswers);
 
     if (currentQuestion + 1 < questions.length && globalTimeLeft > 0) {
-      // Move to next question
       setCurrentQuestion(prev => prev + 1);
     } else {
-      // All questions answered or time expired - verify and end game
+      if (isProcessingRef.current) return;
+      
+      isProcessingRef.current = true;
       const finalCorrect = await verifyAnswers(newAnswers);
       setCorrectAnswers(finalCorrect);
       await endGame(finalCorrect);
+      isProcessingRef.current = false;
     }
   };
 
   const verifyAnswers = async (answers: string[]): Promise<number> => {
     try {
-      // Verify answers server-side to prevent cheating
       const questionIds = questions.map(q => q.id);
       
       const { data, error } = await supabase
@@ -185,13 +265,8 @@ export default function Game() {
         .in('id', questionIds);
 
       if (error) throw error;
+      if (!data) return 0;
 
-      if (!data) {
-        console.error('No data returned from database');
-        return 0;
-      }
-
-      // Create a map for O(1) lookup by question ID
       const correctAnswersMap = new Map(
         data.map(q => [q.id, { correct_answer: q.correct_answer, options: q.options as Record<string, string> }])
       );
@@ -201,125 +276,141 @@ export default function Game() {
         const questionId = questions[index].id;
         const questionData = correctAnswersMap.get(questionId);
         
-        if (questionData) {
-          const { correct_answer, options } = questionData;
-          
-          // Normalize user answer for comparison
-          const normalizedAnswer = answer.toLowerCase().trim();
-          
-          // Normalize the correct answer (could be "A", "a", or full text)
-          const normalizedCorrect = correct_answer.toLowerCase().trim();
-          
-          // Check multiple match scenarios:
-          let isMatch = false;
-          
-          // 1. Direct match (user answer matches correct answer exactly)
-          if (normalizedAnswer === normalizedCorrect) {
-            isMatch = true;
-          }
-          
-          // 2. If correct_answer is a key like "A", "B", "C", "D"
-          // Check if user's answer matches the text value of that key
-          if (!isMatch && options && options[correct_answer.toUpperCase()]) {
-            const correctAnswerText = options[correct_answer.toUpperCase()].toLowerCase().trim();
-            if (normalizedAnswer === correctAnswerText) {
-              isMatch = true;
-            }
-          }
-          
-          // 3. If user selected a key (like "A") and correct answer is also a key
-          if (!isMatch && normalizedAnswer.length === 1 && normalizedCorrect.length === 1) {
-            if (normalizedAnswer === normalizedCorrect) {
-              isMatch = true;
-            }
-          }
-          
-          // 4. If user selected text, check if it matches any option value where the key is the correct answer
-          if (!isMatch && options) {
-            Object.entries(options).forEach(([key, value]) => {
-              if (key.toLowerCase() === normalizedCorrect && value.toLowerCase().trim() === normalizedAnswer) {
-                isMatch = true;
-              }
-            });
-          }
-          
-          // Debug log (view in browser console F12 during play)
-          console.log(`Q${index + 1} [${questionId}]:`);
-          console.log(`  User answer: '${answer}' (normalized: '${normalizedAnswer}')`);
-          console.log(`  Correct answer: '${correct_answer}' (normalized: '${normalizedCorrect}')`);
-          console.log(`  Options:`, options);
-          console.log(`  Match: ${isMatch}`);
-          
-          if (isMatch) {
-            correct++;
-          }
-        } else {
-          console.error(`No correct answer found for question ID: ${questionId}`);
+        if (questionData && isAnswerCorrect(answer, questionData.correct_answer, questionData.options)) {
+          correct++;
         }
       });
 
-      // Log final score
-      console.log(`Final score: ${correct}/${answers.length} correct`);
-
+      console.log(`✅ Verified answers: ${correct}/${answers.length} correct`);
       return correct;
     } catch (error) {
-      console.error('Error verifying answers:', error);
+      console.error('❌ Error verifying answers:', error);
       return 0;
     }
   };
 
-  const endGame = async (finalCorrect: number) => {
-    if (!walletAddress) return;
+  const isAnswerCorrect = (
+    userAnswer: string,
+    correctAnswer: string,
+    options: Record<string, string>
+  ): boolean => {
+    const normalizedUser = userAnswer.toLowerCase().trim();
+    const normalizedCorrect = correctAnswer.toLowerCase().trim();
+
+    // Direct match
+    if (normalizedUser === normalizedCorrect) return true;
+
+    // User answered with option text, correct answer is key
+    if (options[correctAnswer.toUpperCase()]) {
+      const correctText = options[correctAnswer.toUpperCase()].toLowerCase().trim();
+      if (normalizedUser === correctText) return true;
+    }
+
+    // User answered with key, correct answer might be text
+    if (normalizedUser.length === 1 && options[normalizedUser.toUpperCase()]) {
+      const userText = options[normalizedUser.toUpperCase()].toLowerCase().trim();
+      if (userText === normalizedCorrect) return true;
+    }
+
+    // Cross-check all options
+    for (const [key, value] of Object.entries(options)) {
+      const optionKey = key.toLowerCase();
+      const optionValue = value.toLowerCase().trim();
+      
+      if (optionKey === normalizedCorrect && optionValue === normalizedUser) return true;
+      if (optionValue === normalizedCorrect && optionKey === normalizedUser) return true;
+    }
+
+    return false;
+  };
+
+  const endGame = async (finalCorrect: number): Promise<void> => {
+    if (!walletAddress || gameSessionRef.current.gameEnded) {
+      console.log('⚠️ Game already ended or no wallet address');
+      return;
+    }
+
+    // Mark game as ended immediately to prevent double execution
+    gameSessionRef.current.gameEnded = true;
 
     const won = finalCorrect === 3;
     const earnings = won ? 2.00 : 0;
 
-    setGameState(won ? 'win' : 'loss');
-    
-    if (won) {
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 5000);
-    }
+    console.log('🎮 ENDING GAME:', { won, earnings, finalCorrect });
 
     try {
-      console.log('🎮 GAME END - Starting database update...');
-      
-      // Get user data
-      const { data: user, error: fetchError } = await supabase
-        .from('users')
-        .select('id, balance, points, streak, total_wins, total_plays')
-        .eq('wallet_address', walletAddress)
-        .single();
+      // Attempt to update with retries
+      const success = await updateGameResultsWithRetry(won, earnings, finalCorrect);
 
-      if (fetchError) {
-        console.error('❌ Error fetching user:', fetchError);
-        toast.error('Failed to update game results');
+      if (!success) {
+        toast.error('Failed to save game results. Please contact support.');
+        setGameState('loss');
         return;
       }
 
-      if (user) {
-        // Calculate new values
+      // Set game state after successful update
+      setGameState(won ? 'win' : 'loss');
+      
+      if (won) {
+        setShowConfetti(true);
+        setTimeout(() => setShowConfetti(false), 5000);
+        toast.success(`🎉 GOAT WIN! +$${earnings.toFixed(2)} earned!`);
+      } else {
+        toast.error('Not quite GOAT level... Try again!');
+      }
+
+    } catch (error) {
+      console.error('❌ Critical error ending game:', error);
+      toast.error('An error occurred. Please refresh and contact support if balance is incorrect.');
+      setGameState('loss');
+    }
+  };
+
+  const updateGameResultsWithRetry = async (
+    won: boolean,
+    earnings: number,
+    finalCorrect: number,
+    maxRetries = 3
+  ): Promise<boolean> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`💾 Update attempt ${attempt}/${maxRetries}`);
+
+        // Fetch current user state
+        const { data: user, error: fetchError } = await supabase
+          .from('users')
+          .select('id, balance, points, streak, total_wins, total_plays')
+          .eq('wallet_address', walletAddress)
+          .single();
+
+        if (fetchError) {
+          console.error(`❌ Fetch error on attempt ${attempt}:`, fetchError);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          return false;
+        }
+
+        if (!user) {
+          console.error('❌ User not found');
+          return false;
+        }
+
+        // Calculate new values with precision
         const newBalance = Number((user.balance + earnings).toFixed(2));
         const newPoints = won ? user.points + 1 : user.points;
         const newStreak = won ? user.streak + 1 : 0;
         const newTotalWins = won ? user.total_wins + 1 : user.total_wins;
 
-        console.log('📊 Calculated new stats:', {
-          oldBalance: user.balance,
-          newBalance,
-          oldPoints: user.points,
-          newPoints,
-          oldStreak: user.streak,
-          newStreak,
-          won,
-          change: {
-            balance: newBalance - user.balance,
-            points: newPoints - user.points,
-            streak: newStreak - user.streak
-          }
+        console.log('📊 Calculated updates:', {
+          balance: `${user.balance} → ${newBalance} (+${earnings})`,
+          points: `${user.points} → ${newPoints}`,
+          streak: `${user.streak} → ${newStreak}`,
+          wins: `${user.total_wins} → ${newTotalWins}`
         });
 
-        // Update balance, points, streak, and stats
+        // Build update object
         const updates: any = {
           balance: newBalance,
           points: newPoints,
@@ -331,25 +422,43 @@ export default function Game() {
           updates.last_win = new Date().toISOString();
         }
 
-        console.log('💾 Writing to database...', updates);
-
+        // Perform atomic update with optimistic locking
         const { error: updateError } = await supabase
           .from('users')
           .update(updates)
-          .eq('id', user.id);
+          .eq('id', user.id)
+          .eq('balance', user.balance) // Only update if balance hasn't changed
+          .eq('points', user.points);   // Only update if points haven't changed
 
         if (updateError) {
-          console.error('❌ Error updating user:', updateError);
-          toast.error('Failed to update your stats');
-          return;
+          console.error(`❌ Update error on attempt ${attempt}:`, updateError);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          return false;
         }
 
-        console.log('✅ Database write complete');
+        // Verify the update with multiple checks
+        const verified = await verifyDatabaseUpdate(
+          walletAddress,
+          { balance: newBalance, points: newPoints, streak: newStreak },
+          5, // More verification attempts
+          300
+        );
 
-        // Record game history
-        const { error: historyError } = await supabase
-          .from('game_history')
-          .insert({
+        if (!verified) {
+          console.warn(`⚠️ Verification failed on attempt ${attempt}`);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          return false;
+        }
+
+        // Record game history (non-critical, don't fail if this errors)
+        try {
+          await supabase.from('game_history').insert({
             user_id: user.id,
             wallet_address: walletAddress,
             questions_attempted: 3,
@@ -357,84 +466,105 @@ export default function Game() {
             outcome: won ? 'win' : 'loss',
             earnings,
           });
-
-        if (historyError) {
-          console.error('⚠️ Error recording game history:', historyError);
+        } catch (historyError) {
+          console.warn('⚠️ Failed to record history:', historyError);
         }
 
-        // CRITICAL FIX: Wait longer for database to fully commit (increased from 500ms to 1000ms)
-        console.log('⏳ Waiting for database commit...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Verify the update actually happened before refreshing context
-        let verificationAttempts = 0;
-        let verified = false;
-        
-        while (verificationAttempts < 3 && !verified) {
-          const { data: updatedUser, error: verifyError } = await supabase
-            .from('users')
-            .select('balance, points, streak, total_wins')
-            .eq('wallet_address', walletAddress)
-            .single();
-
-          if (verifyError) {
-            console.error('❌ Verification attempt', verificationAttempts + 1, 'failed:', verifyError);
-          } else if (updatedUser) {
-            console.log('🔍 Verification attempt', verificationAttempts + 1, ':', updatedUser);
-            
-            // Check if the update is reflected in the database
-            const pointsMatch = updatedUser.points === newPoints;
-            const balanceMatch = Math.abs(updatedUser.balance - newBalance) < 0.01; // Float comparison
-            
-            if (pointsMatch && balanceMatch) {
-              console.log('✅ Database update verified!');
-              verified = true;
-            } else {
-              console.log('⚠️ Database not yet updated, expected:', { newPoints, newBalance });
-              console.log('   Got:', { points: updatedUser.points, balance: updatedUser.balance });
+        // Force context refresh with retry
+        let refreshAttempts = 0;
+        while (refreshAttempts < 3) {
+          try {
+            await refreshBalance();
+            console.log('✅ Context refreshed successfully');
+            break;
+          } catch (refreshError) {
+            console.error(`⚠️ Refresh attempt ${refreshAttempts + 1} failed:`, refreshError);
+            refreshAttempts++;
+            if (refreshAttempts < 3) {
+              await new Promise(resolve => setTimeout(resolve, 300));
             }
           }
+        }
 
-          if (!verified && verificationAttempts < 2) {
-            verificationAttempts++;
-            await new Promise(resolve => setTimeout(resolve, 300));
-          } else {
-            break;
+        console.log('✅ Game results saved successfully');
+        return true;
+
+      } catch (error) {
+        console.error(`❌ Exception on attempt ${attempt}:`, error);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+          continue;
+        }
+        return false;
+      }
+    }
+
+    return false;
+  };
+
+  const verifyDatabaseUpdate = async (
+    wallet: string,
+    expectedValues: Record<string, number>,
+    maxAttempts = 5,
+    delayMs = 300
+  ): Promise<boolean> => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('balance, points, streak, credits')
+          .eq('wallet_address', wallet)
+          .single();
+
+        if (error) {
+          console.error(`❌ Verification attempt ${attempt} error:`, error);
+          if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            continue;
+          }
+          return false;
+        }
+
+        if (!data) {
+          console.error('❌ No data returned in verification');
+          return false;
+        }
+
+        // Check all expected values
+        let allMatch = true;
+        for (const [key, expectedValue] of Object.entries(expectedValues)) {
+          const actualValue = data[key as keyof typeof data] as number;
+          
+          // For floating point (balance), allow small difference
+          const matches = key === 'balance'
+            ? Math.abs(actualValue - expectedValue) < 0.01
+            : actualValue === expectedValue;
+
+          if (!matches) {
+            console.log(`⚠️ Verification attempt ${attempt}: ${key} mismatch (expected: ${expectedValue}, got: ${actualValue})`);
+            allMatch = false;
           }
         }
 
-        if (!verified) {
-          console.warn('⚠️ Could not verify database update after 3 attempts');
+        if (allMatch) {
+          console.log(`✅ Verification successful on attempt ${attempt}`);
+          return true;
         }
 
-        // NOW refresh the context - this will use the retry mechanism in WalletContext
-        console.log('🔄 Triggering context refresh...');
-        try {
-          await refreshBalance();
-          console.log('✅ Context refresh complete');
-          
-          // Double-check the context actually updated
-          setTimeout(() => {
-            console.log('🔍 Final context state:', { 
-              contextPoints: points, 
-              expectedPoints: newPoints,
-              match: points === newPoints 
-            });
-          }, 500);
-        } catch (refreshError) {
-          console.error('❌ Error refreshing context:', refreshError);
+        if (attempt < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
 
-        if (won) {
-          toast.success(`🎉 GOAT WIN! +${earnings.toFixed(2)} | Points: ${newPoints}`);
-        } else {
-          toast.error('Not quite GOAT level... Try again!');
+      } catch (error) {
+        console.error(`❌ Verification attempt ${attempt} exception:`, error);
+        if (attempt < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
-    } catch (error) {
-      console.error('❌ Error ending game:', error);
-      toast.error('An error occurred. Please refresh the page.');
     }
+
+    console.error('❌ Verification failed after all attempts');
+    return false;
   };
 
   const handleReinvest = async () => {
@@ -443,21 +573,27 @@ export default function Game() {
       return;
     }
     
-    console.log('🔄 Reinvesting - Starting new game');
+    console.log('🔄 Starting new game');
     
-    // Force a fresh balance check before starting
-    await refreshBalance();
-    
-    // Reset game
+    // Reset all state
     setCurrentQuestion(0);
     setCorrectAnswers(0);
     setUserAnswers([]);
     setGameState('loading');
     setGameStartTime(null);
     setShowConfetti(false);
+    isProcessingRef.current = false;
     
-    // Small delay to ensure state is cleared
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Reset session
+    gameSessionRef.current = {
+      sessionId: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      creditDeducted: false,
+      gameEnded: false
+    };
+    
+    // Refresh balance before starting
+    await refreshBalance();
+    await new Promise(resolve => setTimeout(resolve, 200));
     
     await loadQuestions();
   };
@@ -544,7 +680,6 @@ export default function Game() {
   return (
     <div className="min-h-screen bg-gradient-dark flex items-center justify-center p-3 md:p-4 overflow-x-hidden">
       <div className="max-w-2xl w-full space-y-4">
-        {/* Global Timer HUD */}
         <div className="bg-gradient-card border-2 border-border rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
@@ -561,9 +696,8 @@ export default function Game() {
           />
         </div>
 
-        {/* Question Card */}
         <QuestionCard
-          key={currentQuestion} // Force remount for each question
+          key={currentQuestion}
           question={questions[currentQuestion]}
           onAnswer={handleAnswer}
           questionNumber={currentQuestion + 1}

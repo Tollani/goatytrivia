@@ -41,6 +41,11 @@ export default function Game() {
     loadQuestions();
   }, []);
 
+  // Watch for balance/points updates from context
+  useEffect(() => {
+    console.log('Context updated:', { credits, points, walletAddress });
+  }, [credits, points, walletAddress]);
+
   // Global 30-second timer
   useEffect(() => {
     if (gameState !== 'playing' || !gameStartTime) return;
@@ -108,23 +113,47 @@ export default function Game() {
   const deductCredit = async () => {
     if (!walletAddress) return;
 
-    const { data: user } = await supabase
-      .from('users')
-      .select('id, credits, total_plays')
-      .eq('wallet_address', walletAddress)
-      .single();
-
-    if (user) {
-      await supabase
+    try {
+      const { data: user, error: fetchError } = await supabase
         .from('users')
-        .update({ 
-          credits: Math.max(0, user.credits - 1),
-          last_play: new Date().toISOString(),
-          total_plays: user.total_plays + 1
-        })
-        .eq('id', user.id);
+        .select('id, credits, total_plays')
+        .eq('wallet_address', walletAddress)
+        .single();
 
-      await refreshBalance();
+      if (fetchError) {
+        console.error('Error fetching user for credit deduction:', fetchError);
+        return;
+      }
+
+      if (user) {
+        const newCredits = Math.max(0, user.credits - 1);
+        const newTotalPlays = user.total_plays + 1;
+
+        console.log('Deducting credit:', {
+          oldCredits: user.credits,
+          newCredits,
+          totalPlays: newTotalPlays
+        });
+
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({ 
+            credits: newCredits,
+            last_play: new Date().toISOString(),
+            total_plays: newTotalPlays
+          })
+          .eq('id', user.id);
+
+        if (updateError) {
+          console.error('Error updating credits:', updateError);
+          return;
+        }
+
+        // Force context refresh
+        await refreshBalance();
+      }
+    } catch (error) {
+      console.error('Error in deductCredit:', error);
     }
   };
 
@@ -324,17 +353,34 @@ export default function Game() {
         // Wait a moment for database to fully commit
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Refresh balance from context
-        await refreshBalance();
-
-        // Verify the update
-        const { data: updatedUser } = await supabase
+        // Force fresh data fetch with cache busting
+        const timestamp = Date.now();
+        const { data: updatedUser, error: verifyError } = await supabase
           .from('users')
-          .select('balance, points, streak')
+          .select('balance, points, streak, total_wins')
           .eq('wallet_address', walletAddress)
           .single();
 
-        console.log('Updated user data:', updatedUser);
+        if (verifyError) {
+          console.error('Error verifying update:', verifyError);
+        } else {
+          console.log('Verified updated user data:', updatedUser);
+          console.log('Expected vs Actual:', {
+            expectedBalance: newBalance,
+            actualBalance: updatedUser.balance,
+            expectedPoints: newPoints,
+            actualPoints: updatedUser.points,
+            match: updatedUser.balance === newBalance && updatedUser.points === newPoints
+          });
+        }
+
+        // Refresh balance from context (force refresh)
+        try {
+          await refreshBalance();
+          console.log('Context refreshed at:', timestamp);
+        } catch (refreshError) {
+          console.error('Error refreshing context:', refreshError);
+        }
 
         if (won) {
           toast.success(`🎉 GOAT WIN! +${earnings.toFixed(2)} | Points: ${newPoints}`);
@@ -354,12 +400,22 @@ export default function Game() {
       return;
     }
     
+    console.log('Reinvesting - Starting new game');
+    
+    // Force a fresh balance check before starting
+    await refreshBalance();
+    
     // Reset game
     setCurrentQuestion(0);
     setCorrectAnswers(0);
     setUserAnswers([]);
     setGameState('loading');
     setGameStartTime(null);
+    setShowConfetti(false);
+    
+    // Small delay to ensure state is cleared
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     await loadQuestions();
   };
 

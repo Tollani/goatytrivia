@@ -149,7 +149,8 @@ export default function Game() {
           return;
         }
 
-        // Force context refresh
+        // CRITICAL: Wait for DB commit + refresh with retries
+        await new Promise(resolve => setTimeout(resolve, 800));
         await refreshBalance();
       }
     } catch (error) {
@@ -281,6 +282,8 @@ export default function Game() {
     }
 
     try {
+      console.log('🎮 GAME END - Starting database update...');
+      
       // Get user data
       const { data: user, error: fetchError } = await supabase
         .from('users')
@@ -289,7 +292,7 @@ export default function Game() {
         .single();
 
       if (fetchError) {
-        console.error('Error fetching user:', fetchError);
+        console.error('❌ Error fetching user:', fetchError);
         toast.error('Failed to update game results');
         return;
       }
@@ -301,14 +304,19 @@ export default function Game() {
         const newStreak = won ? user.streak + 1 : 0;
         const newTotalWins = won ? user.total_wins + 1 : user.total_wins;
 
-        console.log('Updating user stats:', {
+        console.log('📊 Calculated new stats:', {
           oldBalance: user.balance,
           newBalance,
           oldPoints: user.points,
           newPoints,
           oldStreak: user.streak,
           newStreak,
-          won
+          won,
+          change: {
+            balance: newBalance - user.balance,
+            points: newPoints - user.points,
+            streak: newStreak - user.streak
+          }
         });
 
         // Update balance, points, streak, and stats
@@ -323,16 +331,20 @@ export default function Game() {
           updates.last_win = new Date().toISOString();
         }
 
+        console.log('💾 Writing to database...', updates);
+
         const { error: updateError } = await supabase
           .from('users')
           .update(updates)
           .eq('id', user.id);
 
         if (updateError) {
-          console.error('Error updating user:', updateError);
+          console.error('❌ Error updating user:', updateError);
           toast.error('Failed to update your stats');
           return;
         }
+
+        console.log('✅ Database write complete');
 
         // Record game history
         const { error: historyError } = await supabase
@@ -347,39 +359,70 @@ export default function Game() {
           });
 
         if (historyError) {
-          console.error('Error recording game history:', historyError);
+          console.error('⚠️ Error recording game history:', historyError);
         }
 
-        // Wait a moment for database to fully commit
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // CRITICAL FIX: Wait longer for database to fully commit (increased from 500ms to 1000ms)
+        console.log('⏳ Waiting for database commit...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // Force fresh data fetch with cache busting
-        const timestamp = Date.now();
-        const { data: updatedUser, error: verifyError } = await supabase
-          .from('users')
-          .select('balance, points, streak, total_wins')
-          .eq('wallet_address', walletAddress)
-          .single();
+        // Verify the update actually happened before refreshing context
+        let verificationAttempts = 0;
+        let verified = false;
+        
+        while (verificationAttempts < 3 && !verified) {
+          const { data: updatedUser, error: verifyError } = await supabase
+            .from('users')
+            .select('balance, points, streak, total_wins')
+            .eq('wallet_address', walletAddress)
+            .single();
 
-        if (verifyError) {
-          console.error('Error verifying update:', verifyError);
-        } else {
-          console.log('Verified updated user data:', updatedUser);
-          console.log('Expected vs Actual:', {
-            expectedBalance: newBalance,
-            actualBalance: updatedUser.balance,
-            expectedPoints: newPoints,
-            actualPoints: updatedUser.points,
-            match: updatedUser.balance === newBalance && updatedUser.points === newPoints
-          });
+          if (verifyError) {
+            console.error('❌ Verification attempt', verificationAttempts + 1, 'failed:', verifyError);
+          } else if (updatedUser) {
+            console.log('🔍 Verification attempt', verificationAttempts + 1, ':', updatedUser);
+            
+            // Check if the update is reflected in the database
+            const pointsMatch = updatedUser.points === newPoints;
+            const balanceMatch = Math.abs(updatedUser.balance - newBalance) < 0.01; // Float comparison
+            
+            if (pointsMatch && balanceMatch) {
+              console.log('✅ Database update verified!');
+              verified = true;
+            } else {
+              console.log('⚠️ Database not yet updated, expected:', { newPoints, newBalance });
+              console.log('   Got:', { points: updatedUser.points, balance: updatedUser.balance });
+            }
+          }
+
+          if (!verified && verificationAttempts < 2) {
+            verificationAttempts++;
+            await new Promise(resolve => setTimeout(resolve, 300));
+          } else {
+            break;
+          }
         }
 
-        // Refresh balance from context (force refresh)
+        if (!verified) {
+          console.warn('⚠️ Could not verify database update after 3 attempts');
+        }
+
+        // NOW refresh the context - this will use the retry mechanism in WalletContext
+        console.log('🔄 Triggering context refresh...');
         try {
           await refreshBalance();
-          console.log('Context refreshed at:', timestamp);
+          console.log('✅ Context refresh complete');
+          
+          // Double-check the context actually updated
+          setTimeout(() => {
+            console.log('🔍 Final context state:', { 
+              contextPoints: points, 
+              expectedPoints: newPoints,
+              match: points === newPoints 
+            });
+          }, 500);
         } catch (refreshError) {
-          console.error('Error refreshing context:', refreshError);
+          console.error('❌ Error refreshing context:', refreshError);
         }
 
         if (won) {
@@ -389,7 +432,7 @@ export default function Game() {
         }
       }
     } catch (error) {
-      console.error('Error ending game:', error);
+      console.error('❌ Error ending game:', error);
       toast.error('An error occurred. Please refresh the page.');
     }
   };
@@ -400,7 +443,7 @@ export default function Game() {
       return;
     }
     
-    console.log('Reinvesting - Starting new game');
+    console.log('🔄 Reinvesting - Starting new game');
     
     // Force a fresh balance check before starting
     await refreshBalance();
@@ -508,7 +551,7 @@ export default function Game() {
               <Clock className="h-5 w-5 text-primary" />
               <span className="text-sm font-medium text-muted-foreground">Total Time</span>
             </div>
-            <span className={`text-2xl font-bold ${globalTimeLeft <= 30 ? 'text-destructive animate-pulse' : 'text-primary'}`}>
+            <span className={`text-2xl font-bold ${globalTimeLeft <= 10 ? 'text-destructive animate-pulse' : 'text-primary'}`}>
               {formatTime(globalTimeLeft)}
             </span>
           </div>

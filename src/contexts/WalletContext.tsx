@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { ethers } from 'ethers';
 import { toast } from 'sonner';
@@ -32,16 +32,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [points, setPoints] = useState(0);
   const [streak, setStreak] = useState(0);
 
-const truncateAddress = (address: string) => {
-  return `${address.slice(0, 4)}...${address.slice(-4)}`;
-};
+  const truncateAddress = (address: string) => {
+    return `${address.slice(0, 4)}...${address.slice(-4)}`;
+  };
 
-// Allow optimistic UI updates after simulated purchases
-const updateCredits = (newCredits: number) => {
-  setCredits(newCredits);
-};
+  // Allow optimistic UI updates after simulated purchases
+  const updateCredits = (newCredits: number) => {
+    setCredits(newCredits);
+  };
 
-  const refreshBalance = async () => {
+  const refreshBalance = useCallback(async (retries = 3, delayMs = 300) => {
     if (!walletAddress) return;
     
     try {
@@ -58,6 +58,9 @@ const updateCredits = (newCredits: number) => {
         throw sessionError;
       }
 
+      // Add a small delay to allow DB writes to complete
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+
       // Ensure admin wallets have enough test credits (no-op for non-admins)
       try {
         await supabase.rpc('admin_ensure_test_credits', {
@@ -70,13 +73,43 @@ const updateCredits = (newCredits: number) => {
         console.log('Admin credits check (optional):', err);
       }
 
-      // CRITICAL FIX: Bypass RPC and fetch directly from users table
-      // This ensures we always get fresh data without any caching
-      const { data, error } = await supabase
-        .from('users')
-        .select('balance, credits, points, streak')
-        .eq('wallet_address', walletAddress)
-        .single();
+      // Fetch fresh data with retry logic to handle race conditions
+      let attempts = 0;
+      let data = null;
+      let error = null;
+      let lastFetchedData = { balance, credits, points, streak };
+
+      while (attempts < retries) {
+        const result = await supabase
+          .from('users')
+          .select('balance, credits, points, streak')
+          .eq('wallet_address', walletAddress)
+          .single();
+        
+        data = result.data;
+        error = result.error;
+
+        // If we got data, check if it's actually new/different
+        if (data) {
+          const isDataChanged = (
+            Number(data.credits) !== lastFetchedData.credits ||
+            Number(data.points) !== lastFetchedData.points ||
+            Number(data.balance) !== lastFetchedData.balance ||
+            Number(data.streak) !== lastFetchedData.streak
+          );
+
+          // On first attempt or if data changed, use it
+          if (attempts === 0 || isDataChanged) {
+            break;
+          }
+        }
+
+        attempts++;
+        if (attempts < retries) {
+          console.log(`⏳ Retry ${attempts}/${retries} - waiting for fresh data...`);
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
 
       if (error) {
         console.error('❌ Profile fetch error:', error);
@@ -94,32 +127,60 @@ const updateCredits = (newCredits: number) => {
         const row: any = Array.isArray(rpcData) ? rpcData[0] : rpcData;
         if (row) {
           console.log('✅ Balance data (via RPC fallback):', row);
-          setBalance(Number(row.balance ?? 0));
-          setCredits(Number(row.credits ?? 0));
-          setPoints(Number(row.points ?? 0));
-          setStreak(Number(row.streak ?? 0));
+          const newBalance = Number(row.balance ?? 0);
+          const newCredits = Number(row.credits ?? 0);
+          const newPoints = Number(row.points ?? 0);
+          const newStreak = Number(row.streak ?? 0);
+          
+          console.log('📊 State update (RPC):', {
+            oldBalance: balance,
+            newBalance,
+            oldCredits: credits,
+            newCredits,
+            oldPoints: points,
+            newPoints,
+            oldStreak: streak,
+            newStreak
+          });
+          
+          setBalance(newBalance);
+          setCredits(newCredits);
+          setPoints(newPoints);
+          setStreak(newStreak);
         }
         return;
       }
 
       if (data) {
         console.log('✅ Fresh balance data:', data, 'fetched at', timestamp);
+        
+        const newBalance = Number(data.balance ?? 0);
+        const newCredits = Number(data.credits ?? 0);
+        const newPoints = Number(data.points ?? 0);
+        const newStreak = Number(data.streak ?? 0);
+        
         console.log('📊 State update:', {
           oldBalance: balance,
-          newBalance: Number(data.balance ?? 0),
+          newBalance,
           oldCredits: credits,
-          newCredits: Number(data.credits ?? 0),
+          newCredits,
           oldPoints: points,
-          newPoints: Number(data.points ?? 0),
+          newPoints,
           oldStreak: streak,
-          newStreak: Number(data.streak ?? 0)
+          newStreak,
+          changed: {
+            balance: balance !== newBalance,
+            credits: credits !== newCredits,
+            points: points !== newPoints,
+            streak: streak !== newStreak
+          }
         });
         
         // Force state updates even if values appear the same
-        setBalance(Number(data.balance ?? 0));
-        setCredits(Number(data.credits ?? 0));
-        setPoints(Number(data.points ?? 0));
-        setStreak(Number(data.streak ?? 0));
+        setBalance(newBalance);
+        setCredits(newCredits);
+        setPoints(newPoints);
+        setStreak(newStreak);
       } else {
         console.warn('⚠️ No profile data returned, user might not exist yet');
       }
@@ -127,7 +188,7 @@ const updateCredits = (newCredits: number) => {
       console.error('❌ refreshBalance failed:', error);
       toast.error('Failed to fetch wallet data');
     }
-  };
+  }, [walletAddress, chain, balance, credits, points, streak]);
 
   const isMobile = () => {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -179,7 +240,7 @@ const updateCredits = (newCredits: number) => {
 
             toast.success(`Connected to Solana: ${truncateAddress(address)}`);
             
-            // Wait a bit for database to sync
+            // Wait a bit for database to sync, then refresh
             await new Promise(resolve => setTimeout(resolve, 500));
             await refreshBalance();
             return;
@@ -265,7 +326,7 @@ const updateCredits = (newCredits: number) => {
             
             toast.success(`Connected to Base: ${truncateAddress(address)}`);
             
-            // Wait a bit for database to sync
+            // Wait a bit for database to sync, then refresh
             await new Promise(resolve => setTimeout(resolve, 500));
             await refreshBalance();
             return;
@@ -327,6 +388,7 @@ const updateCredits = (newCredits: number) => {
     toast.info(`Switched to ${newChain === 'solana' ? 'Solana' : 'Base'}`);
   };
 
+  // Only refresh on initial wallet connection
   useEffect(() => {
     if (walletAddress) {
       refreshBalance();
